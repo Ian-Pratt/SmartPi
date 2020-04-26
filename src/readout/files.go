@@ -22,39 +22,41 @@ func writeSharedFile(c *smartpi.Config, values *smartpi.ADE7878Readout, balanced
 	s := make([]string, 17)
 	i := 0
 	for _, p = range smartpi.MainPhases {
-		s[i] = fmt.Sprint(values.Current[p])
+		s[i] = fmt.Sprintf("%6.3f", values.Current[p])
 		i++
 	}
-	s[i] = fmt.Sprint(values.Current[smartpi.PhaseN])
+	s[i] = fmt.Sprintf("%6.3f", values.Current[smartpi.PhaseN])
 	i++
 	for _, p = range smartpi.MainPhases {
-		s[i] = fmt.Sprint(values.Voltage[p])
+		s[i] = fmt.Sprintf("%7.3f", values.Voltage[p])
 		i++
 	}
 	for _, p = range smartpi.MainPhases {
-		s[i] = fmt.Sprint(values.ActiveWatts[p])
+		s[i] = fmt.Sprintf("%8.3f", values.ActiveWatts[p])
 		i++
 	}
 	for _, p = range smartpi.MainPhases {
-		s[i] = fmt.Sprint(values.CosPhi[p])
+		s[i] = fmt.Sprintf("%.3f", values.CosPhi[p])
 		i++
 	}
 	for _, p = range smartpi.MainPhases {
-		s[i] = fmt.Sprint(values.Frequency[p])
+		s[i] = fmt.Sprintf("%7.3f", values.Frequency[p])
 		i++
 	}
 	// sald Values
-	s[i] = fmt.Sprint(balancedvalue)
+	s[i] = fmt.Sprintf("%.3f", balancedvalue)
 
 	t := time.Now()
 	timeStamp := t.Format("2006-01-02 15:04:05")
 	logLine := "## Shared File Update ## "
 	logLine += fmt.Sprintf(timeStamp)
 	logLine += fmt.Sprintf(" I1: %s  I2: %s  I3: %s  I4: %s  ", s[0], s[1], s[2], s[3])
-	logLine += fmt.Sprintf("V1: %s  V2: %s  V3: %s  ", s[4], s[5], s[6])
+	//logLine += fmt.Sprintf("V1: %s  V2: %s  V3: %s  ", s[4], s[5], s[6])
+	logLine += fmt.Sprintf("V1: %s  ", s[4])
 	logLine += fmt.Sprintf("P1: %s  P2: %s  P3: %s  ", s[7], s[8], s[9])
-	logLine += fmt.Sprintf("COS1: %s  COS2: %s  COS3: %s  ", s[10], s[11], s[12])
-	logLine += fmt.Sprintf("F1: %s  F2: %s  F3: %s  ", s[13], s[14], s[15])
+	//logLine += fmt.Sprintf("COS1: %s  COS2: %s  COS3: %s  ", s[10], s[11], s[12])
+	//logLine += fmt.Sprintf("F1: %s  F2: %s  F3: %s  ", s[13], s[14], s[15])
+	logLine += fmt.Sprintf("F1: %s  ", s[13])
 	logLine += fmt.Sprintf("Balanced: %s  ", s[16])
 	log.Info(logLine)
 	sharedFile := filepath.Join(c.SharedDir, c.SharedFile)

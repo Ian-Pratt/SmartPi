@@ -17,8 +17,8 @@ GOGET=$(GO) get
 
 pkgs = $(shell $(GO) list ./src/...)
 
-all: format makedir get buildsmartpireadout buildsmartpiserver buildsmartpiftpupload buildsmartpimodbusserver
-#all: makedir get buildsmartpireadout
+#all: format makedir get buildsmartpireadout buildsmartpiserver buildsmartpiftpupload buildsmartpimodbusserver
+all: makedir get buildsmartpireadout
 
 makedir:
 	@echo "start building tree..."

@@ -106,7 +106,8 @@ type CTFactors struct {
 var (
 	CTTypes = map[string]CTFactors{
 		"YHDC_SCT013": CTFactors{
-			CurrentResistor:       7.07107,
+			//CurrentResistor:       7.07107,
+			CurrentResistor:       7.47,
 			CurrentClampFactor:    0.05,
 			OffsetCurrent:         1.049084906,
 			OffsetVoltage:         1.0,
@@ -153,16 +154,29 @@ func DeviceFetchInt(d *i2c.Device, l int, cmd []byte) int64 {
 	return result
 }
 
-func resetADE7878() {
+func resetADE7878(d *i2c.Device) {
 	println("RESET")
 	p, err := rpi.OpenPin(4, rpi.OUT)
 	if err != nil {
 		panic(err)
 	}
 	defer p.Close()
-	p.Write(rpi.LOW)
-	time.Sleep(time.Second)
 	p.Write(rpi.HIGH)
+	time.Sleep(time.Millisecond*200)
+	p.Write(rpi.LOW)
+        time.Sleep(time.Millisecond*200)
+
+        for {
+            time.Sleep(time.Millisecond*1)
+            a := DeviceFetchInt(d, 4, ADE7878REG["STATUS1"])
+            //fmt.Printf("%08x\n",a)
+            if a & 0x8000 != 0 {
+                println("write status")
+                WriteRegister(d, "STATUS1", 0xff, 0xff, 0xff, 0xff)
+                break
+            }
+        }
+
 }
 
 func initPiForADE7878() {
@@ -179,12 +193,34 @@ func WriteRegister(d *i2c.Device, register string, data ...byte) (err error) {
 	return d.Write(append(ADE7878REG[register], data...))
 }
 
+
+func WriteRegisterV(d *i2c.Device, register string, data ...byte) (err error) {
+        r := d.Write(append(ADE7878REG[register], data...))
+        w := int64(binary.BigEndian.Uint32(data)) & 0x0fffffff
+	a := DeviceFetchInt(d, 4, ADE7878REG[register])
+        //println(register, "r=",r, data, "w=", w, "a=",a)
+	fmt.Printf("%s %08x %08x\n",register,w,a) 
+        if w != a { 
+		panic(r)
+        }
+        return r
+}
+
+func ReadRegisterX(d *i2c.Device, register string) int64 {
+        a := DeviceFetchInt(d, 4, ADE7878REG[register])
+        //println(register, "a=",a)
+        //fmt.Printf("Read %s %08x\n",register,a)
+        return a
+}
+
 func InitADE7878(c *Config) (*i2c.Device, error) {
 
 	d, err := i2c.Open(&i2c.Devfs{Dev: c.I2CDevice}, ADE7878_ADDR)
 	if err != nil {
 		panic(err)
 	}
+
+        resetADE7878(d)
 
 	// 0xEC01 (CONFIG2-REGISTER)
 	// 00000010 --> I2C-Lock
@@ -206,6 +242,13 @@ func InitADE7878(c *Config) (*i2c.Device, error) {
 	if err != nil {
 		panic(err)
 	}
+
+        // it appears the DSP must be running, otherwise CIRMSOS/NIRMSOS appear to be OK. After RUN they read out 0
+        // 0xE228 (RUN-Register)
+        err = WriteRegister(d, "RUN", 0x00, 0x01)
+        if err != nil {
+                panic(err)
+        }
 
 	// 0xE7FE writeprotection
 	err = d.Write([]byte{0xE7, 0xFE, 0xAD})
@@ -231,6 +274,14 @@ func InitADE7878(c *Config) (*i2c.Device, error) {
 		panic(err)
 	}
 
+        // HACK IAP TODO - we are not using Integrator. We only have A channel voltage connected so feed to all channels
+        // 16 bit regsiter 11:10 = 10 ; 13:12 = 01    1800   
+        err = WriteRegister(d, "CONFIG", 0x18, 0x00 )
+        if err != nil {
+                panic (err)
+        }
+
+
 	if c.Integrator == true {
 
 		// 0xE618 (CONFIG-REGISTER)
@@ -254,14 +305,15 @@ func InitADE7878(c *Config) (*i2c.Device, error) {
 		panic(err)
 	}
 
+        // WTHR=394616854 ?????
 	//0x43AB (WTHR1-REGISTER)
-	err = WriteRegister(d, "WTHR1", 0x00, 0x00, 0x00, 0x17)
+	err = WriteRegisterV(d, "WTHR1", 0x00, 0x00, 0x00, 0x17)
 	if err != nil {
 		panic(err)
 	}
 
 	//0x43AC (WTHR0-REGISTER)
-	err = WriteRegister(d, "WTHR0", 0x00, 0x85, 0x60, 0x16)
+	err = WriteRegisterV(d, "WTHR0", 0x00, 0x85, 0x60, 0x16)
 	if err != nil {
 		panic(err)
 	}
@@ -291,55 +343,103 @@ func InitADE7878(c *Config) (*i2c.Device, error) {
 	// }
 
 	// 0x43B3 (VLEVEL-REGISTER)
-	err = WriteRegister(d, "VLEVEL", 0x00, 0x0C, 0xEC, 0x85)
+	err = WriteRegisterV(d, "VLEVEL", 0x00, 0x0C, 0xEC, 0x85)
 	if err != nil {
 		panic(err)
 	}
 
-	time.Sleep(875 * time.Millisecond)
+        //	time.Sleep(875 * time.Millisecond)
 
 	// // 0x4381 (AVGAIN-REGISTER)
 	// outcome := DeviceFetchInt(d, 4, ADE7878REG["AVGAIN"])
 	// fmt.Printf("AVGAIN-REGISTER VORHER%g   %x %x %x %x \n", outcome, data[0], data[1], data[2], data[3])
 
 	// 0x4381 (AVGAIN-REGISTER)
-	err = WriteRegister(d, "AVGAIN", 0xFF, 0xFC, 0x1C, 0xC2)
+	err = WriteRegisterV(d, "AVGAIN", 0xFF, 0xFC, 0x1C, 0xC2)
 	if err != nil {
 		panic(err)
 	}
 
 	// 0x4383 (BVGAIN-REGISTER)
-	err = WriteRegister(d, "BVGAIN", 0xFF, 0xFB, 0xCA, 0x60)
-	// err = WriteRegister(d, "BVGAIN", 0xFF, 0xFC, 0x1C, 0xC2)
+	// err = WriteRegister(d, "BVGAIN", 0xFF, 0xFB, 0xCA, 0x60)
+	err = WriteRegisterV(d, "BVGAIN", 0xFF, 0xFC, 0x1C, 0xC2)
 	if err != nil {
 		panic(err)
 	}
 
 	// 0x4385 (CVGAIN-REGISTER)
-	err = WriteRegister(d, "CVGAIN", 0xFF, 0xFC, 0x12, 0xDE)
-	// err = WriteRegister(d, "CVGAIN", 0xFF, 0xFC, 0x1C, 0xC2)
+	//err = WriteRegister(d, "CVGAIN", 0xFF, 0xFC, 0x12, 0xDE)
+	err = WriteRegisterV(d, "CVGAIN", 0xFF, 0xFC, 0x1C, 0xC2)
 	if err != nil {
 		panic(err)
 	}
 
-	// err = WriteRegister(d, "AIRMSOS", 0x11, 0x47, 0xE9)
-	// if err != nil {
-	// 	panic(err)
-	// }
+	err = WriteRegisterV(d, "AIRMSOS", 0x0F, 0xFD, 0x40, 0xE0)
+	if err != nil {
+		panic(err)
+	}
+
+	err = WriteRegisterV(d, "BIRMSOS", 0x0F, 0xFD, 0x40, 0xE0)
+	if err != nil {
+		panic(err)
+	}
+
+	err = WriteRegisterV(d, "CIRMSOS", 0x0F, 0xFD, 0x40, 0xE0)
+	if err != nil {
+		panic(err)
+	}
+
+	err = WriteRegisterV(d, "NIRMSOS", 0x0F, 0xFD, 0x40, 0xE0)
+	if err != nil {
+		panic(err)
+	}
+
+        // freq measurement, set to Voltage A phase`
+        err = WriteRegister(d, "MMODE", 0x1c )
+        if err != nil {
+                panic(err)
+        }
 
 	// Line cycle mode
-	// 0xE702 LCYCMODE
-	err = WriteRegister(d, "LCYCMODE", 0x0F)
+	// 0xE702 LCYCMODE count 200 on V1 Voltage A phase -- others wobble as noy connected
+	err = WriteRegister(d, "LCYCMODE", 0x00, 0x00, 0x00, 0x0f)  // 0x0f
+	if err != nil {
+		panic(err)
+	}
+a := ReadRegisterX(d, "LCYCMODE")
+fmt.Printf("LCYCMODE=%08x\n",a)
+
+	// Line cycle mode count c8=200 (2sec)  / 0x64 is 100 (1sec) 
+	// 0xE60C LINECYC
+	err = WriteRegister(d, "LINECYC", 0x00, 0x00, 0x00, 0x64 )  // 0xC8)
 	if err != nil {
 		panic(err)
 	}
 
-	// Line cycle mode count
-	// 0xE60C LINECYC
-	err = WriteRegister(d, "LINECYC", 0xC8)
-	if err != nil {
-		panic(err)
-	}
+a = ReadRegisterX(d, "LINECYC")
+fmt.Printf("LINECYC=%08x\n",a)
+
+        // data sheet suggests writting the last register 3 times
+/*
+        WriteRegister(d, "LINECYC", 0xC8)
+        WriteRegister(d, "LINECYC", 0xC8)
+        WriteRegister(d, "LINECYC", 0xC8)
+*/
+
+/*
+ReadRegisterX(d, "AIGAIN")
+ReadRegisterX(d, "BIGAIN")
+ReadRegisterX(d, "CIGAIN")
+ReadRegisterX(d, "NIGAIN")
+ReadRegisterX(d, "AVGAIN") 
+ReadRegisterX(d, "BVGAIN")
+ReadRegisterX(d, "CVGAIN")
+ReadRegisterX(d, "NVGAIN")  
+ReadRegisterX(d, "AIRMSOS")
+ReadRegisterX(d, "BIRMSOS")
+ReadRegisterX(d, "CIRMSOS")
+ReadRegisterX(d, "NIRMSOS")
+*/
 
 	// 0xE7FE writeprotection
 	err = d.Write([]byte{0xE7, 0xFE, 0xAD})
@@ -353,11 +453,109 @@ func InitADE7878(c *Config) (*i2c.Device, error) {
 		panic(err)
 	}
 
+/*
+ReadRegisterX(d, "AIGAIN")
+ReadRegisterX(d, "BIGAIN")
+ReadRegisterX(d, "CIGAIN")
+ReadRegisterX(d, "NIGAIN")
+ReadRegisterX(d, "NVGAIN")
+ReadRegisterX(d, "AIRMSOS")
+ReadRegisterX(d, "BIRMSOS")
+ReadRegisterX(d, "CIRMSOS")
+ReadRegisterX(d, "NIRMSOS")
+*/
+
+/* already running 
+        // it appears the DSP must be running, otherwise CIRMSOS/NIRMSOS appear to be OK. After RUN they read out 0
 	// 0xE228 (RUN-Register)
 	err = WriteRegister(d, "RUN", 0x00, 0x01)
 	if err != nil {
 		panic(err)
 	}
+*/
+
+/*
+ReadRegisterX(d, "AIGAIN")
+ReadRegisterX(d, "BIGAIN")
+ReadRegisterX(d, "CIGAIN")
+ReadRegisterX(d, "NIGAIN")
+ReadRegisterX(d, "AVGAIN")
+ReadRegisterX(d, "BVGAIN")
+ReadRegisterX(d, "CVGAIN")
+ReadRegisterX(d, "NVGAIN")
+ReadRegisterX(d, "AIRMSOS")
+ReadRegisterX(d, "BIRMSOS")
+ReadRegisterX(d, "CIRMSOS")
+ReadRegisterX(d, "NIRMSOS")
+*/
+
+WriteRegister(d,"STATUS0", 0xff, 0xff, 0xff, 0xff)
+t1 := int64(0)
+tx := 0.0
+        for {
+//break
+            a := ReadRegisterX(d,"STATUS0")
+            //fmt.Printf("--%08x\n",a)
+            if a & (1<<5) != 0 {
+                currentTime := time.Now()
+                outcome := float64(DeviceFetchInt(d, 2, []byte{0xE6, 0x07}))
+                frequency := ade7878Clock / (outcome + 1)
+
+/*
+CurrentResistor:       7.47,                                                                                            CurrentClampFactor:    0.05,                                                                                            OffsetCurrent:         1.049084906,
+OffsetVoltage:         1.0,                                                                                             PowerCorrectionFactor: 0.019413 
+ccf = 1.0 / (float64(c.CTTypePrimaryCurrent[phase]) / 100.0)
+current = ((((outcome * 0.3535) / rmsFactor) / cr) / ccf) * 100.0 * oc * c.CalibrationfactorI[phase]
+*/  
+h := ReadRegisterX(d, "AIRMS")
+//fmt.Printf("%08x\n",h)
+c := (((((float64(h))*0.3535)/4191910.0) / 7.47)     / 0.050) * 100.0 * 1.049084906 * 1.0
+i1 := c
+h = ReadRegisterX(d, "BIRMS")
+c = (((((float64(h))*0.3535)/4191910.0) / 7.47)     / 0.050) * 100.0 * 1.049084906 * 1.0
+i2 := c
+h = ReadRegisterX(d, "CIRMS")
+c = (((((float64(h))*0.3535)/4191910.0) / 7.47)     / 0.050) * 100.0 * 1.049084906 * 1.0
+i3 := c
+h = ReadRegisterX(d, "NIRMS")
+c = (((((float64(h))*0.3535)/4191910.0) / 7.47)     / 0.050) * 100.0 * 1.049084906 * 1.0
+i4 := c
+
+h = ReadRegisterX(d, "AVRMS")
+v1 := (float64(h) / 1e+4) 
+
+h = ReadRegisterX(d, "AWATT")
+p1 := ((float64)(h)) * 0.019413 
+//fmt.Printf("%10x\n", h)
+h = ReadRegisterX(d, "BWATT")
+p2 := ((float64)(h)) * 0.019413
+h = ReadRegisterX(d, "CWATT")
+p3 := ((float64)(h)) * 0.019413
+
+e1 := ReadRegisterX(d, "AWATTHR")
+e2 := ReadRegisterX(d, "BWATTHR")
+e3 := ReadRegisterX(d, "CWATTHR")
+if e1 < 0 {
+    e1 = e1 * -1.0 
+}
+if e2 < 0 {
+    e2 = e2 * -1.0
+}
+if e3 < 0 {
+    e3 = e3 * -1.0
+}
+t1 = t1 + e1 + e2 + e3
+tx = tx + ((i1+i2+i3)*v1)
+//fmt.Printf("%d %f\n",h, e1)
+//XXX
+                fmt.Printf("%s f=%6.3f I1=%6.3f I2=%6.3f I3=%6.3f I4=%6.3f V1=%7.3f P1=%6.0f P2=%6.0f P3=%6.0f E1=%3d E2=%3d E3=%3d T1=%5d PX=%4.0f TX=%6.0f\n",currentTime.Format("2006-01-02T15:04:05.000-07:00"), frequency, i1, i2, i3, i4, v1, p1, p2, p3, e1, e2, e3, t1, (i1+i2+i3)*v1, tx/3600)
+                //fmt.Printf("%s\n",currentTime.String())
+time.Sleep(time.Millisecond*500)
+               WriteRegister(d, "STATUS0", 0x00, 0x00, 0x00, 0x20)
+            }
+        }
+
+
 
 	return d, nil
 }
@@ -378,14 +576,7 @@ func ReadCurrent(d *i2c.Device, c *Config, phase Phase) (current float64) {
 	}
 
 	var rmsFactor float64
-	switch c.PowerFrequency {
-	case 60:
-		rmsFactor = 3493258.0 // 60Hz
-	case 50:
-		rmsFactor = 4191910.0 // 50Hz
-	default:
-		panic(fmt.Errorf("Invalid frequency %g", c.PowerFrequency))
-	}
+	rmsFactor = 4191910.0 // 50Hz
 
 	if c.MeasureCurrent[phase] {
 		outcome := float64(DeviceFetchInt(d, 4, command))
@@ -399,11 +590,16 @@ func ReadCurrent(d *i2c.Device, c *Config, phase Phase) (current float64) {
 		}
 		// fmt.Println("CalibrationfactorI: ", phase, "  ", c.CalibrationfactorI[phase])
 		oc := CTTypes[c.CTType[phase]].OffsetCurrent
-		outcome = outcome - 7300
+		// outcome = outcome - 7300
 		current = ((((outcome * 0.3535) / rmsFactor) / cr) / ccf) * 100.0 * oc * c.CalibrationfactorI[phase]
+
+//fmt.Printf("outcome=%f cr=%f CTTypePrimaryCurrent=%f ccf=%f oc=%f Calib=%f I=%f\n",outcome, cr, float64(c.CTTypePrimaryCurrent[phase]), ccf, oc, c.CalibrationfactorI[phase], current)
+
+
 	} else {
 		current = 0.0
 	}
+
 	return current
 }
 
@@ -454,6 +650,10 @@ func ReadActiveWatts(d *i2c.Device, c *Config, phase Phase) (watts float64) {
 	outcome := float64(DeviceFetchInt(d, 4, command))
 	if c.MeasureCurrent[phase] {
 		watts = outcome * CTTypes[c.CTType[phase]].PowerCorrectionFactor / pcf
+q :=  float64(ReadRegisterX(d, "BWATT"))
+fmt.Printf("ZZZ %d outcome=%f (%f) PCF=%f pcf=%f watts=%f\n", phase, outcome, q, CTTypes[c.CTType[phase]].PowerCorrectionFactor, pcf, watts)
+ 
+
 	} else {
 		watts = 0.0
 	}
@@ -466,6 +666,7 @@ func ReadActiveWatts(d *i2c.Device, c *Config, phase Phase) (watts float64) {
 
 func ReadActiveEnergy(d *i2c.Device, c *Config, phase Phase) (energy float64) {
 	command := make([]byte, 2)
+
 	switch phase {
 	case PhaseA:
 		command = []byte{0xE4, 0x00} // 0xE4000 (AWATTHR total active energy phase A)
