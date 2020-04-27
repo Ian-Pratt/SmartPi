@@ -256,7 +256,7 @@ func main() {
 
 	log.SetLevel(config.LogLevel)
 
-	smartpi.CheckDatabase(config.DatabaseDir)
+	//smartpi.CheckDatabase(config.DatabaseDir)
 
 	listenAddress := config.MetricsListenAddress
 

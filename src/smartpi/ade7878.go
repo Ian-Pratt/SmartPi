@@ -31,7 +31,7 @@ import (
 	"fmt"
 	"math"
 	"time"
-
+	"os"
 	rpi "github.com/nathan-osman/go-rpigpio"
 	"golang.org/x/exp/io/i2c"
 
@@ -155,7 +155,7 @@ func DeviceFetchInt(d *i2c.Device, l int, cmd []byte) int64 {
 }
 
 func resetADE7878(d *i2c.Device) {
-	println("RESET")
+	//println("RESET")
 	p, err := rpi.OpenPin(4, rpi.OUT)
 	if err != nil {
 		panic(err)
@@ -171,7 +171,7 @@ func resetADE7878(d *i2c.Device) {
             a := DeviceFetchInt(d, 4, ADE7878REG["STATUS1"])
             //fmt.Printf("%08x\n",a)
             if a & 0x8000 != 0 {
-                println("write status")
+                //println("write status")
                 WriteRegister(d, "STATUS1", 0xff, 0xff, 0xff, 0xff)
                 break
             }
@@ -199,7 +199,7 @@ func WriteRegisterV(d *i2c.Device, register string, data ...byte) (err error) {
         w := int64(binary.BigEndian.Uint32(data)) & 0x0fffffff
 	a := DeviceFetchInt(d, 4, ADE7878REG[register])
         //println(register, "r=",r, data, "w=", w, "a=",a)
-	fmt.Printf("%s %08x %08x\n",register,w,a) 
+	//fmt.Printf("%s %08x %08x\n",register,w,a) 
         if w != a { 
 		panic(r)
         }
@@ -212,6 +212,25 @@ func ReadRegisterX(d *i2c.Device, register string) int64 {
         //fmt.Printf("Read %s %08x\n",register,a)
         return a
 }
+
+var fi *os.File
+var nextfileTime time.Time
+
+func newfile( n time.Time ) () {
+	if fi != nil {
+		fi.Close()
+	}
+	s:= fmt.Sprintf("3phase-%s.log",n.Format("2006-01-02T15:04:05-07:00"))
+	t, err := os.Create(s)
+	if err != nil {
+		panic( err )
+	}
+	fi = t
+	
+	y, m, d := n.Date()
+    nextfileTime = time.Date(y, m, d+1, 0, 0, 0, 0, n.Location())
+}
+
 
 func InitADE7878(c *Config) (*i2c.Device, error) {
 
@@ -406,8 +425,9 @@ func InitADE7878(c *Config) (*i2c.Device, error) {
 	if err != nil {
 		panic(err)
 	}
-a := ReadRegisterX(d, "LCYCMODE")
-fmt.Printf("LCYCMODE=%08x\n",a)
+
+//a := ReadRegisterX(d, "LCYCMODE")
+//fmt.Printf("LCYCMODE=%08x\n",a)
 
 	// Line cycle mode count c8=200 (2sec)  / 0x64 is 100 (1sec) 
 	// 0xE60C LINECYC
@@ -416,8 +436,8 @@ fmt.Printf("LCYCMODE=%08x\n",a)
 		panic(err)
 	}
 
-a = ReadRegisterX(d, "LINECYC")
-fmt.Printf("LINECYC=%08x\n",a)
+//a = ReadRegisterX(d, "LINECYC")
+//fmt.Printf("LINECYC=%08x\n",a)
 
         // data sheet suggests writting the last register 3 times
 /*
@@ -489,10 +509,12 @@ ReadRegisterX(d, "CIRMSOS")
 ReadRegisterX(d, "NIRMSOS")
 */
 
+newfile(time.Now())
 WriteRegister(d,"STATUS0", 0xff, 0xff, 0xff, 0xff)
 t1 := int64(0)
 tx := 0.0
-        for {
+spin := 0
+         for {
 //break
             a := ReadRegisterX(d,"STATUS0")
             //fmt.Printf("--%08x\n",a)
@@ -548,11 +570,25 @@ t1 = t1 + e1 + e2 + e3
 tx = tx + ((i1+i2+i3)*v1)
 //fmt.Printf("%d %f\n",h, e1)
 //XXX
-                fmt.Printf("%s f=%6.3f I1=%6.3f I2=%6.3f I3=%6.3f I4=%6.3f V1=%7.3f P1=%6.0f P2=%6.0f P3=%6.0f E1=%3d E2=%3d E3=%3d T1=%5d PX=%4.0f TX=%6.0f\n",currentTime.Format("2006-01-02T15:04:05.000-07:00"), frequency, i1, i2, i3, i4, v1, p1, p2, p3, e1, e2, e3, t1, (i1+i2+i3)*v1, tx/3600)
-                //fmt.Printf("%s\n",currentTime.String())
-time.Sleep(time.Millisecond*500)
-               WriteRegister(d, "STATUS0", 0x00, 0x00, 0x00, 0x20)
-            }
+
+if currentTime.After(nextfileTime) {
+	newfile(currentTime)
+}
+
+                st := fmt.Sprintf("%s f=%6.3f I1=%6.3f I2=%6.3f I3=%6.3f I4=%6.3f V1=%7.3f P1=%6.0f P2=%6.0f P3=%6.0f E1=%3d E2=%3d E3=%3d T1=%5d PX=%4.0f TX=%6.0f s=%d\n",currentTime.Format("2006-01-02T15:04:05.000-07:00"), frequency, i1, i2, i3, i4, v1, p1, p2, p3, e1, e2, e3, t1, (i1+i2+i3)*v1, tx/3600, spin)
+				//println( st )
+				fi.WriteString( st )
+				//fmt.Printf("%s\n",currentTime.String())
+//time.Sleep(time.Millisecond*950)
+
+//fmt.Printf("S %s\n",time.Now())
+nextTime := currentTime.Add(time.Millisecond*989)
+time.Sleep(time.Until(nextTime))
+//fmt.Printf("F %s %s\n", time.Now(), nextTime)
+			   WriteRegister(d, "STATUS0", 0x00, 0x00, 0x00, 0x20)
+			   spin = 0
+			}
+		spin = spin + 1	
         }
 
 
