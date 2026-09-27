@@ -106,8 +106,8 @@ type CTFactors struct {
 var (
 	CTTypes = map[string]CTFactors{
 		"YHDC_SCT013": CTFactors{
-			//CurrentResistor:       7.07107,
-			CurrentResistor:       7.47,
+			CurrentResistor:       7.07107,
+			//IAP revert CurrentResistor:       7.47,
 			CurrentClampFactor:    0.05,
 			OffsetCurrent:         1.049084906,
 			OffsetVoltage:         1.0,
@@ -337,6 +337,19 @@ func InitADE7878(c *Config) (*i2c.Device, error) {
 		panic(err)
 	}
 
+        // XXX IAP NEW
+        // 0x43AD (VARTHR1-REGISTER)
+        err = WriteRegisterV(d, "VARTHR1", 0x00, 0x00, 0x00, 0x17)
+        if err != nil {
+            panic(err)
+        }
+        
+        // XXX IAP NEW 0x43AE (VARTHR0-REGISTER)
+        err = WriteRegisterV(d, "VARTHR0", 0x00, 0x85, 0x60, 0x16)
+        if err != nil {
+            panic(err)
+        }
+
 	// // 0x43AD (VARTHR1-REGISTER)
 	// err = d.Write(append(ADE7878REG["VARTHR1"], 0x17, 0x85, 0x60, 0x16))
 	// if err != nil {
@@ -511,9 +524,11 @@ ReadRegisterX(d, "NIRMSOS")
 
 newfile(time.Now())
 WriteRegister(d,"STATUS0", 0xff, 0xff, 0xff, 0xff)
-t1 := int64(0)
 tx := 0.0
 spin := 0
+
+previousTime := time.Time{}
+
          for {
 //break
             a := ReadRegisterX(d,"STATUS0")
@@ -530,52 +545,48 @@ ccf = 1.0 / (float64(c.CTTypePrimaryCurrent[phase]) / 100.0)
 current = ((((outcome * 0.3535) / rmsFactor) / cr) / ccf) * 100.0 * oc * c.CalibrationfactorI[phase]
 */  
 h := ReadRegisterX(d, "AIRMS")
-//fmt.Printf("%08x\n",h)
-c := (((((float64(h))*0.3535)/4191910.0) / 7.47)     / 0.050) * 100.0 * 1.049084906 * 1.0
+c := (((((float64(h))*0.3535)/4191910.0) / 7.07107)    / 0.050) * 100.0 * 1.049084906 * 0.92
 i1 := c
 h = ReadRegisterX(d, "BIRMS")
-c = (((((float64(h))*0.3535)/4191910.0) / 7.47)     / 0.050) * 100.0 * 1.049084906 * 1.0
+c = (((((float64(h))*0.3535)/4191910.0) / 7.07107)     / 0.050) * 100.0 * 1.049084906 * 0.92
 i2 := c
 h = ReadRegisterX(d, "CIRMS")
-c = (((((float64(h))*0.3535)/4191910.0) / 7.47)     / 0.050) * 100.0 * 1.049084906 * 1.0
+c = (((((float64(h))*0.3535)/4191910.0) / 7.07107)     / 0.050) * 100.0 * 1.049084906 * 0.92 
 i3 := c
 h = ReadRegisterX(d, "NIRMS")
-c = (((((float64(h))*0.3535)/4191910.0) / 7.47)     / 0.050) * 100.0 * 1.049084906 * 1.0
+c = (((((float64(h))*0.3535)/4191910.0) / 7.07107)     / 0.050) * 100.0 * 1.049084906 * 0.935
 i4 := c
 
 h = ReadRegisterX(d, "AVRMS")
-v1 := (float64(h) / 1e+4) 
+v2 := (float64(h) / 1e+4) 
 
-h = ReadRegisterX(d, "AWATT")
-p1 := ((float64)(h)) * 0.019413 
-//fmt.Printf("%10x\n", h)
-h = ReadRegisterX(d, "BWATT")
-p2 := ((float64)(h)) * 0.019413
-h = ReadRegisterX(d, "CWATT")
-p3 := ((float64)(h)) * 0.019413
-
+const powerScale = 0.019413
+p1x := ((float64)( ReadRegisterX(d, "AWATT") ) ) * powerScale
+p2  := ((float64)( ReadRegisterX(d, "BWATT") ) ) * powerScale
+p3x := ((float64)( ReadRegisterX(d, "CWATT") ) ) * powerScale
+q1x := ((float64)( ReadRegisterX(d, "AVAR") ) ) * powerScale
+q2  := ((float64)( ReadRegisterX(d, "BVAR") ) ) * powerScale
+q3x := ((float64)( ReadRegisterX(d, "CVAR") ) ) * powerScale 
 e1 := ReadRegisterX(d, "AWATTHR")
 e2 := ReadRegisterX(d, "BWATTHR")
 e3 := ReadRegisterX(d, "CWATTHR")
-if e1 < 0 {
-    e1 = e1 * -1.0 
+fe1 := ReadRegisterX(d, "AFWATTHR")
+fe2 := ReadRegisterX(d, "BFWATTHR")
+fe3 := ReadRegisterX(d, "CFWATTHR")
+fq1 := ReadRegisterX(d, "AFVARHR")
+fq2 := ReadRegisterX(d, "BFVARHR")
+fq3 := ReadRegisterX(d, "CFVARHR")
+
+if (previousTime != time.Time{} ) {
+  dt := currentTime.Sub(previousTime).Seconds()
+  tx += ((i1 + i2 + i3) * v2) * dt
 }
-if e2 < 0 {
-    e2 = e2 * -1.0
-}
-if e3 < 0 {
-    e3 = e3 * -1.0
-}
-t1 = t1 + e1 + e2 + e3
-tx = tx + ((i1+i2+i3)*v1)
-//fmt.Printf("%d %f\n",h, e1)
-//XXX
+previousTime = currentTime;
 
 if currentTime.After(nextfileTime) {
 	newfile(currentTime)
 }
-
-                st := fmt.Sprintf("%s f=%6.3f I1=%6.3f I2=%6.3f I3=%6.3f I4=%6.3f V1=%7.3f P1=%6.0f P2=%6.0f P3=%6.0f E1=%3d E2=%3d E3=%3d T1=%5d PX=%4.0f TX=%6.0f s=%d\n",currentTime.Format("2006-01-02T15:04:05.000-07:00"), frequency, i1, i2, i3, i4, v1, p1, p2, p3, e1, e2, e3, t1, (i1+i2+i3)*v1, tx/3600, spin)
+                st := fmt.Sprintf("%s f=%6.3f I1=%6.3f I2=%6.3f I3=%6.3f I4=%6.3f V2=%7.3f P1X=%6.0f P2=%6.0f P3X=%6.0f Q1X=%6.0f Q2=%6.0f Q3X=%6.0f E1=%3d E2=%3d E3=%3d FE1X=%d FE2=%d FE3X=%d FQ1X=%d FQ2=%d FQ3X=%d PX=%4.0f SVAh=%6.0f s=%d\n",currentTime.Format("2006-01-02T15:04:05.000-07:00"), frequency, i1, i2, i3, i4, v2, p1x, p2, p3x, q1x, q2, q3x, e1, e2, e3, fe1, fe2, fe3, fq1, fq2, fq3, (i1+i2+i3)*v2, tx/3600, spin)
 				//println( st )
 				fi.WriteString( st )
 				//fmt.Printf("%s\n",currentTime.String())
@@ -707,9 +718,9 @@ func ReadActiveEnergy(d *i2c.Device, c *Config, phase Phase) (energy float64) {
 	case PhaseA:
 		command = []byte{0xE4, 0x00} // 0xE4000 (AWATTHR total active energy phase A)
 	case PhaseB:
-		command = []byte{0xE4, 0x00} // 0xE4001 (BWATTHR total active energy phase B)
+		command = []byte{0xE4, 0x01} // XXX NEW IAP 0xE4001 (BWATTHR total active energy phase B)
 	case PhaseC:
-		command = []byte{0xE4, 0x00} // 0xE4002 (CWATTHR total active energy phase C)
+		command = []byte{0xE4, 0x02} // XXX NEW IAP 0xE4002 (CWATTHR total active energy phase C)
 	default:
 		panic(fmt.Errorf("Invalid phase %q", phase))
 	}
