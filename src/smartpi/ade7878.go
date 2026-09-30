@@ -231,6 +231,14 @@ func newfile( n time.Time ) () {
     nextfileTime = time.Date(y, m, d+1, 0, 0, 0, 0, n.Location())
 }
 
+func rotatePQ(p, q, degrees float64) (float64, float64) {
+        a := degrees * math.Pi / 180.0
+        c := math.Cos(a)
+        s := math.Sin(a)
+
+        return p*c - q*s,
+               p*s + q*c
+}
 
 func InitADE7878(c *Config) (*i2c.Device, error) {
 
@@ -524,10 +532,7 @@ ReadRegisterX(d, "NIRMSOS")
 
 newfile(time.Now())
 WriteRegister(d,"STATUS0", 0xff, 0xff, 0xff, 0xff)
-tx := 0.0
 spin := 0
-
-previousTime := time.Time{}
 
          for {
 //break
@@ -562,11 +567,77 @@ v2 := (float64(h) / 1e+4)
 
 const powerScale = 0.019413
 p1x := ((float64)( ReadRegisterX(d, "AWATT") ) ) * powerScale
-p2  := ((float64)( ReadRegisterX(d, "BWATT") ) ) * powerScale
+p2x := ((float64)( ReadRegisterX(d, "BWATT") ) ) * powerScale
 p3x := ((float64)( ReadRegisterX(d, "CWATT") ) ) * powerScale
 q1x := ((float64)( ReadRegisterX(d, "AVAR") ) ) * powerScale
-q2  := ((float64)( ReadRegisterX(d, "BVAR") ) ) * powerScale
+q2x := ((float64)( ReadRegisterX(d, "BVAR") ) ) * powerScale
 q3x := ((float64)( ReadRegisterX(d, "CVAR") ) ) * powerScale 
+
+// Undo the structural phase displacement caused by using V2 for all
+// three power calculations.
+
+const sqrt3over2 = 0.8660254037844386
+
+// L1: rotate by +120 degrees.
+p1s := -0.5*p1x - sqrt3over2*q1x
+q1s :=  sqrt3over2*p1x - 0.5*q1x
+
+// L2: already referenced to the correct voltage phase.
+p2s := p2x
+q2s := q2x
+
+// L3: rotate by -120 degrees.
+p3s := -0.5*p3x + sqrt3over2*q3x
+q3s := -sqrt3over2*p3x - 0.5*q3x
+
+
+//
+// Apply the small residual phase corrections measured using the
+// resistive three-phase immersion load.
+//
+// These are angle corrections only.  Do NOT apply the AIRMS 0.92
+// calibration factors to power.
+//
+
+p1, q1 := rotatePQ(p1s, q1s, 3.25)
+p2, q2 := rotatePQ(p2s, q2s, 3.42)
+p3, q3 := rotatePQ(p3s, q3s, 2.96)
+
+pt := p1 + p2 + p3
+qt := q1 + q2 + q3
+
+// Vector apparent power derived from P and Q.
+// Equals true apparent power for sinusoidal waveforms, but can be
+// lower than Vrms*Irms when there is harmonic/distortion power.
+spq1 := math.Hypot(p1, q1)
+spq2 := math.Hypot(p2, q2)
+spq3 := math.Hypot(p3, q3)
+spqt := spq1 + spq2 + spq3
+
+// RMS apparent-power estimate using the independently measured IRMS.
+// Only V2 is physically available, so V2 is used as the voltage
+// magnitude for all three phases.  This introduces a small error when
+// V1/V2/V3 magnitudes differ.
+si1 := v2 * i1
+si2 := v2 * i2
+si3 := v2 * i3
+sit := si1 + si2 + si3
+
+pf1, pf2, pf3, pft := 0.0, 0.0, 0.0, 0.0
+
+if si1 != 0 {
+        pf1 = p1 / si1
+}
+if si2 != 0 {
+        pf2 = p2 / si2
+}
+if si3 != 0 {
+        pf3 = p3 / si3
+}
+if sit != 0 {
+        pft = pt / sit
+}
+
 e1 := ReadRegisterX(d, "AWATTHR")
 e2 := ReadRegisterX(d, "BWATTHR")
 e3 := ReadRegisterX(d, "CWATTHR")
@@ -577,18 +648,12 @@ fq1 := ReadRegisterX(d, "AFVARHR")
 fq2 := ReadRegisterX(d, "BFVARHR")
 fq3 := ReadRegisterX(d, "CFVARHR")
 
-if (previousTime != time.Time{} ) {
-  dt := currentTime.Sub(previousTime).Seconds()
-  tx += ((i1 + i2 + i3) * v2) * dt
-}
-previousTime = currentTime;
-
 if currentTime.After(nextfileTime) {
 	newfile(currentTime)
 }
-                st := fmt.Sprintf("%s f=%6.3f I1=%6.3f I2=%6.3f I3=%6.3f I4=%6.3f V2=%7.3f P1X=%6.0f P2=%6.0f P3X=%6.0f Q1X=%6.0f Q2=%6.0f Q3X=%6.0f E1=%3d E2=%3d E3=%3d FE1X=%d FE2=%d FE3X=%d FQ1X=%d FQ2=%d FQ3X=%d PX=%4.0f SVAh=%6.0f s=%d\n",currentTime.Format("2006-01-02T15:04:05.000-07:00"), frequency, i1, i2, i3, i4, v2, p1x, p2, p3x, q1x, q2, q3x, e1, e2, e3, fe1, fe2, fe3, fq1, fq2, fq3, (i1+i2+i3)*v2, tx/3600, spin)
-				//println( st )
-				fi.WriteString( st )
+                str := fmt.Sprintf("%s f=%6.3f I1=%6.3f I2=%6.3f I3=%6.3f I4=%6.3f V2=%7.3f P1X=%6.0f P2X=%6.0f P3X=%6.0f Q1X=%6.0f Q2X=%6.0f Q3X=%6.0f P1=%6.0f P2=%6.0f P3=%6.0f PT=%6.0f Q1=%6.0f Q2=%6.0f Q3=%6.0f QT=%6.0f SPQ1=%6.0f SPQ2=%6.0f SPQ3=%6.0f SPQT=%6.0f SI1=%6.0f SI2=%6.0f SI3=%6.0f SIT=%6.0f PF1=%6.3f PF2=%6.3f PF3=%6.3f PFT=%6.3f E1X=%3d E2=%3d E3X=%3d FE1X=%d FE2=%d FE3X=%d FQ1X=%d FQ2=%d FQ3X=%d s=%d\n",currentTime.Format("2006-01-02T15:04:05.000-07:00"), frequency, i1, i2, i3, i4, v2, p1x, p2x, p3x, q1x, q2x, q3x, p1, p2, p3, pt, q1, q2, q3, qt, spq1, spq2, spq3, spqt, si1, si2, si3, sit, pf1, pf2, pf3, pft, e1, e2, e3, fe1, fe2, fe3, fq1, fq2, fq3, spin)
+				//println( str )
+				fi.WriteString( str )
 				//fmt.Printf("%s\n",currentTime.String())
 //time.Sleep(time.Millisecond*950)
 
